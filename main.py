@@ -80,16 +80,28 @@ def draw_trend_arrow(epd, trend, x, y, size=28):
 
 history = []  # list of mmol float values
 
-def connect_wifi(networks):
+WIFI_STATUS = {
+    0: "Idle", 1: "Connecting", 3: "Got IP",
+    -1: "Wrong password", -2: "No AP found", -3: "Connect fail",
+    201: "No AP found", 202: "Auth fail", 203: "Fail",
+}
+
+def connect_wifi(networks, epd):
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
     if wlan.isconnected() and any(wlan.config('ssid') == s for s, _ in networks):
         return wlan
     wlan.disconnect()
     time.sleep(1)
-    for ssid, password in networks:
-        wlan.connect(ssid, password)
+    for idx, (ssid, password) in enumerate(networks):
+        label = "WiFi " + str(idx + 1) + "/" + str(len(networks))
+        epd.fill(0xff)
+        epd.text(label, 2, 5, 0x00)
+        epd.text(ssid, 2, 20, 0x00)
+        epd.text("Connecting...", 2, 35, 0x00)
+        epd.display(epd.buffer)
         print("Connecting to", ssid, "...")
+        wlan.connect(ssid, password)
         for _ in range(20):
             if wlan.isconnected():
                 break
@@ -97,7 +109,17 @@ def connect_wifi(networks):
         if wlan.isconnected():
             print("Connected:", wlan.ifconfig())
             return wlan
-        print("Failed, trying next...")
+        status = wlan.status()
+        msg = WIFI_STATUS.get(status, "Unknown") + " (" + str(status) + ")"
+        print("Failed on", ssid, "- status:", msg)
+        epd.fill(0xff)
+        epd.text(label + " failed:", 2, 5, 0x00)
+        epd.text(ssid, 2, 20, 0x00)
+        epd.text(msg, 2, 35, 0x00)
+        if idx + 1 < len(networks):
+            epd.text("Trying next...", 2, 50, 0x00)
+        epd.display(epd.buffer)
+        time.sleep(2)
     raise RuntimeError("WiFi failed on all networks")
 
 def fetch_glucose(retries=5):
@@ -190,14 +212,14 @@ env = load('.env')
 networks = [(env['WIFI_SSID'], env['WIFI_PASSWORD'])]
 if 'WIFI_SSID2' in env:
     networks.append((env['WIFI_SSID2'], env['WIFI_PASSWORD2']))
-connect_wifi(networks)
 
 epd = EPD_2in9_Landscape()
 epd.Clear(0xff)
+connect_wifi(networks, epd)
 
 while True:
     try:
-        connect_wifi(networks)
+        connect_wifi(networks, epd)
         data = fetch_glucose()
         print("Glucose:", data)
 
