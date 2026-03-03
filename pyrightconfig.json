@@ -1,0 +1,6 @@
+{
+  "extraPaths": ["lib"],
+  "ignore": ["**"],
+  "reportMissingModuleSource": "none",
+  "reportMissingImports": "none"
+}
