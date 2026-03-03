@@ -15,38 +15,90 @@ DEXCOM_HOST  = 'dexcom.chezzer.dev'
 POLL_INTERVAL = 300   # 5 minutes
 MAX_HISTORY   = 148   # 2px per point across 296px display (~12hrs)
 
-GRAPH_TOP    = 44
-GRAPH_BOTTOM = 124
+GRAPH_TOP    = 49
+GRAPH_BOTTOM = 109
 GRAPH_LEFT   = 0
 GRAPH_RIGHT  = 295
 
-TREND_ARROWS = {
-    'flat':           '->',
-    'rising':         '/^',
-    'rising quickly': '^^',
-    'falling':        'v/',
-    'falling quickly':'vv',
-}
+def draw_trend_arrow(epd, trend, x, y, size=28):
+    """Draw a graphical trend arrow in a (size x size) box at (x, y)."""
+    mid = size // 2
+    ah = size // 3
+
+    def filled_right_head(rx, my):
+        for dy in range(-ah, ah + 1):
+            epd.hline(rx - ah, my + dy, ah - abs(dy) + 1, 0x00)
+
+    def filled_up_head(mx, ty):
+        for dx in range(-ah, ah + 1):
+            epd.vline(mx + dx, ty + abs(dx), ah - abs(dx) + 1, 0x00)
+
+    def filled_down_head(mx, by):
+        for dx in range(-ah, ah + 1):
+            epd.vline(mx + dx, by - ah, ah - abs(dx) + 1, 0x00)
+
+    if trend == "flat":
+        for d in (-1, 0, 1):
+            epd.hline(x, y + mid + d, size - ah, 0x00)
+        filled_right_head(x + size, y + mid)
+
+    elif trend == "singleup":
+        for d in (-1, 0, 1):
+            epd.vline(x + mid + d, y + ah, size - ah, 0x00)
+        filled_up_head(x + mid, y)
+
+    elif trend == "singledown":
+        for d in (-1, 0, 1):
+            epd.vline(x + mid + d, y, size - ah, 0x00)
+        filled_down_head(x + mid, y + size)
+
+    elif trend == "fortyfiveup":
+        for d in (-1, 0, 1):
+            epd.line(x, y + size + d, x + size - ah // 2, y + ah // 2 + d, 0x00)
+        for dy in range(ah + 1):
+            epd.hline(x + size - ah + dy, y + dy, ah - dy + 1, 0x00)
+
+    elif trend == "fortyfivedown":
+        for d in (-1, 0, 1):
+            epd.line(x, y + d, x + size - ah // 2, y + size - ah // 2 + d, 0x00)
+        for dy in range(ah + 1):
+            epd.hline(x + size - ah + dy, y + size - dy, ah - dy + 1, 0x00)
+
+    elif trend == "doubleup":
+        off = ah // 2
+        for cx in (x + mid - off, x + mid + off):
+            for d in (-1, 0, 1):
+                epd.vline(cx + d, y + ah, size - ah, 0x00)
+            filled_up_head(cx, y)
+
+    elif trend == "doubledown":
+        off = ah // 2
+        for cx in (x + mid - off, x + mid + off):
+            for d in (-1, 0, 1):
+                epd.vline(cx + d, y, size - ah, 0x00)
+            filled_down_head(cx, y + size)
 
 history = []  # list of mmol float values
 
-def connect_wifi(ssid, password):
+def connect_wifi(networks):
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
-    if wlan.isconnected() and wlan.config('ssid') == ssid:
+    if wlan.isconnected() and any(wlan.config('ssid') == s for s, _ in networks):
         return wlan
     wlan.disconnect()
     time.sleep(1)
-    wlan.connect(ssid, password)
-    print("Connecting to", ssid, "...")
-    for _ in range(20):
+    for ssid, password in networks:
+        wlan.connect(ssid, password)
+        print("Connecting to", ssid, "...")
+        for _ in range(20):
+            if wlan.isconnected():
+                break
+            time.sleep(1)
         if wlan.isconnected():
-            break
-        time.sleep(1)
-    if not wlan.isconnected():
-        raise RuntimeError("WiFi failed, status: " + str(wlan.status()))
-    print("Connected:", wlan.ifconfig())
-    return wlan
+            print("Connected:", wlan.ifconfig())
+            return wlan
+        print("Failed, trying next...")
+    raise RuntimeError("WiFi failed on all networks")
 
 def fetch_glucose(retries=5):
     for attempt in range(retries):
@@ -114,16 +166,16 @@ def draw_graph(epd, history):
 
 def update_display(epd, data, history):
     mmol  = str(data['mmol'])
-    trend = TREND_ARROWS.get(data.get('trend', ''), '?')
+    trend = data.get('trend', '')
 
     epd.fill(0xff)
 
     # Large glucose value top-left
-    scale = 4
+    scale = 5
     draw_large(epd, mmol, 2, 2, scale)
 
     # Trend arrow to the right
-    draw_large(epd, trend, 2 + len(mmol) * 8 * scale + 6, 10, scale=2)
+    draw_trend_arrow(epd, trend, 2 + len(mmol) * 8 * scale + 6, 2, size=36)
 
     # Separator line
     epd.hline(0, GRAPH_TOP - 3, 296, 0x00)
@@ -135,14 +187,17 @@ def update_display(epd, data, history):
 
 # --- Main ---
 env = load('.env')
-connect_wifi(env['WIFI_SSID'], env['WIFI_PASSWORD'])
+networks = [(env['WIFI_SSID'], env['WIFI_PASSWORD'])]
+if 'WIFI_SSID2' in env:
+    networks.append((env['WIFI_SSID2'], env['WIFI_PASSWORD2']))
+connect_wifi(networks)
 
 epd = EPD_2in9_Landscape()
 epd.Clear(0xff)
 
 while True:
     try:
-        connect_wifi(env['WIFI_SSID'], env['WIFI_PASSWORD'])
+        connect_wifi(networks)
         data = fetch_glucose()
         print("Glucose:", data)
 
